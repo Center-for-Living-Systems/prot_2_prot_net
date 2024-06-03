@@ -42,15 +42,12 @@ channel_to_protein_dict = {
 
 
 def transform_list(
-                    output_channels=[],
-                    vector_components=[],
+                    output_channels=[],                    
                     crop_size=0,
                     norm_output={}, # keys: rescale, threshold. can also contain 'norm_to_max' bool
                     perturb_input={},
                     perturb_output={},
                     add_noise={}, # Sholud be dict with keys: 'type', 'other kwargs like std, N, R, if applicable' 
-                    magnitude_only=False,
-                    angmag=False,
                     rotate=True
                     ):
     transform_list = []
@@ -58,18 +55,12 @@ def transform_list(
     if 'rescale' in perturb_input or 'rescale' in perturb_output: transform_list.append(RandomRescale(rescale_factor=0.7))
     if 'rescale_deterministic' in perturb_input or 'rescale_deterministic' in perturb_output: transform_list.append(RescaleImage(rescale_factor=perturb_input['rescale_deterministic']))
 
-    if rotate: transform_list.append(RandomRotate(vector_components)) # Really, any vector quantities
-    #transform_list.append(RandomTranspose(vector_components))
-#    transform_list.append(RandomFlip(output_channels))
     transform_list.append(CellCrop(crop_size))
 
     if 'smooth' in perturb_input: transform_list.append(SmoothForces())
     if 'blur' in perturb_output: transform_list.append(RandomBlur()) # just blurs inputs
     if add_noise: transform_list.append( AddNoise( **add_noise )) # Should be list with: type=[in_gaussian, out_gaussian, mag_peaks]
-
-    if magnitude_only: transform_list.append(Magnitude(output_channels))
     if norm_output: transform_list.append( Threshold(output_channels, **norm_output))  
-    if angmag: transform_list.append(AngleMag(output_channels))
 
     transform_list.append(ToTensor())
 
@@ -79,12 +70,12 @@ def transform_list(
 
 
 
-
-
 def prediction_transforms(args, opt_args = {}):
     transform_list = []
     transform_list.append(CellCrop(args.crop_size))
-    if 'zoom' in args.transform.split(','): transform_list.append(ResolutionChange(args.zoomfactor))
+    if 'zoom' in args.transform.split(','): 
+        transform_list.append(ResolutionChange(args.zoomfactor))
+        
     if 'zyx_threshold' in opt_args: transform_list.append(BinarizeZyxin(opt_args['zyx_threshold']))
     if 'zyx_scale' in opt_args: transform_list.append(ZyxinRescale(opt_args['zyx_scale']))
     if 'peak_rescale' in opt_args: transform_list.append(PeakRescale(**opt_args['peak_rescale'])) # should be dict containing {n peaks: , rescale factor: }
@@ -93,11 +84,10 @@ def prediction_transforms(args, opt_args = {}):
     transform_list.append(ToTensor())
     if 'smooth' in args.transform.split(','): transform_list.append(SmoothForces())
     
-    if args.magnitude_only:
-        transform_list.append(Magnitude(args.output))
-        args.output = args.output.split(',')[0]
     if normalize_output: Threshold(output_channels, **normalize_output)  
 
+    print(transform_list)
+    
     transform = transforms.Compose(transform_list)
     return transform
 
@@ -136,21 +126,19 @@ class CellDataset(Dataset):
         self.root = root
 
         self.transform = transform_list(**transform_kwargs) 
+        print(transform_kwargs)
         self.validation_split = validation_split
 
         self.in_channels = in_channels
         self.in_unique = np.unique([int(x) for ch in self.in_channels for x in ch])
         self.out_channels = out_channels
-        if transform_kwargs['magnitude_only']: self.out_channels = out_channels[0]
-
+       
         self.test_cells = test_cells
 
         self.frames_to_keep = frames_to_keep
         
         self.load_info(extensions=('npy'), force_remake=remake_dataset_csv, exclude_frames=exclude_frames)
         self.load_baselines(input_baseline_normalization)
-        self.load_force_baselines(output_baseline_normalization)
-
         
         # Used below to go from frame -> integer time
         def get_time(row): return int(row.filename.split('.')[0].split('_')[-1])
@@ -267,40 +255,7 @@ class CellDataset(Dataset):
                 act_im-= 1 # to center around 0
                 return act_im
                     
-        elif remove_type == 'outside_inside' and 7 not in self.in_unique:
-            if self.verbose: print("Removing baselines outside, inside.")
-            baseline_csvs = []
-            for R in root:
-                baseline_csvs.append(os.path.join(R, 'cell_mean_baselines.csv'))
-                
-            cell_baselines = [pd.read_csv(bsln) for bsln in baseline_csvs]
-            for R, bsln in zip(root, cell_baselines):
-                bsln['root'] = R
-
-            baselines = pd.concat(cell_baselines, ignore_index=True)
-
-            self.info['zyxin_baseline'] = 0.
-            self.info['actin_baseline'] = 0.
-
-            for n in range(len(self.info)):
-                cell = self.info.loc[n, 'folder']
-                r = self.info.loc[n, 'root']
-                try:
-                    self.info.loc[n,'zyxin_baseline_out'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'zyxin_lifetime_mean_outside'].item()
-                    self.info.loc[n,'zyxin_baseline_in'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'zyxin_lifetime_mean_inside'].item()
-
-                except:
-                    print(cell, r, baselines.columns)
-                    assert(1==0)
-                    
-            def rm_baseline_zyx(zyx_im, idx):
-                zyx_im -= self.info.zyxin_baseline_out[idx]
-                zyx_im[zyx_im<0] = 0
-                zyx_im /= (self.info.zyxin_baseline_in[idx] - self.info.zyxin_baseline_out[idx]) # to center around 0                
-                return zyx_im
-            def rm_baseline_act(act_im, idx): return act_im
-            
-        elif remove_type == 'outside_inside' and 7 in self.in_unique:
+        elif remove_type == 'outside_inside' :
             if self.verbose: print("Removing baselines (actin + zyxin) outside, inside.")
             baseline_csvs = []
             for R in root:
@@ -408,78 +363,7 @@ class CellDataset(Dataset):
         
         return
 
-    def load_force_baselines(self, remove_type):
-        root = self.root
-        if remove_type == 'mean': 
-            if self.verbose: print("Force normalized by mean...")
-            baseline_csvs = []
-            for R in root:
-                baseline_csvs.append(os.path.join(R, 'cell_force_baselines.csv'))
-
-            cell_baselines = [pd.read_csv(bsln) for bsln in baseline_csvs]
-
-            #print("DP L500: ", [c.columns for c in cell_baselines]
-            for R, bsln in zip(root, cell_baselines):
-                bsln['root'] = R
-
-            baselines = pd.concat(cell_baselines, ignore_index=True)
-
-            for n in range(len(self.info)):
-                cell = self.info.loc[n, 'folder']
-                r = self.info.loc[n, 'root']
-                try:
-                    self.info.loc[n,'F_mean'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'F_lifetime_mean_avg'].item()
-                    self.info.loc[n,'F_max'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'F_lifetime_max_avg'].item()
-                except:
-                    print(cell, r, baselines.columns)
-                    print(baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'zyxin_'+remove_baseline])
-                    print(cell, r)
-                    assert(1==0)
-
-            def force_normalization(F, idx): 
-                F /= self.info.F_mean[idx]*10
-                return F
-
-        elif remove_type == 'mean_dataset': 
-            if self.verbose: print("Force normalized by dataset mean.")
-            baseline_csvs = []
-            for R in root:
-                baseline_csvs.append(os.path.join(R, 'cell_force_baselines_bydataset.csv'))
-
-            if self.verbose: print("Force Baseline File: ", baseline_csvs[0])
-
-            cell_baselines = [pd.read_csv(bsln) for bsln in baseline_csvs]
-
-            #print("DP L500: ", [c.columns for c in cell_baselines]
-            for R, bsln in zip(root, cell_baselines):
-                bsln['root'] = R
-
-            baselines = pd.concat(cell_baselines, ignore_index=True)
-
-            for n in range(len(self.info)):
-                cell = self.info.loc[n, 'folder']
-                r = self.info.loc[n, 'root']
-                try:
-                    self.info.loc[n,'F_mean'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'F_lifetime_mean_avg'].item()
-                    self.info.loc[n,'F_max'] = baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'F_lifetime_max_avg'].item()
-                except:
-                    print(cell, r, baselines.columns)
-                    print(baselines.loc[((baselines.cell==cell) & (baselines.root==r)), 'zyxin_'+remove_baseline])
-                    print(cell, r)
-                    assert(1==0)
-
-            def force_normalization(F, idx): 
-                F /= self.info.F_mean[idx]*10
-                return F
-        else: 
-            if self.verbose: print('Default force baseline removal')
-            def force_normalization(F, idx): return F 
             
-        self.normalize_force = force_normalization
-           
-        return
- 
-        
     def mask_crop(self, image, mask_idx=4, dilation_iter=50):
         dil = scipy.ndimage.binary_dilation(image[mask_idx], iterations=dilation_iter)#, structure=disk(r), iterations=1)
         image[:, dil==0] = 0
@@ -498,25 +382,25 @@ class CellDataset(Dataset):
         if mask_crop: image = self.mask_crop(image)
 
         in_unique = np.unique([int(x) for ch in self.in_channels for x in ch])
-        if 4 in in_unique: image[4] /= np.max(image[4])
-        if 6 in in_unique: image[6] = self.rm_baseline_zyx(image[6], idx) # to center around 0
-        if 7 in in_unique: image[7] = self.rm_baseline_zyx(image[7], idx) # to center around 0
-
-        image[self.out_channels, :, :] = self.normalize_force(image[self.out_channels, :, :], idx) # to center around 0
-
+        # if 4 in in_unique:             
+        if True:
+            image[4] /= np.max(image[4])
+        # if 6 in in_unique: 
+        if True:
+            image[6] = self.rm_baseline_zyx(image[6], idx) # to center around 0
+        # if 7 in in_unique: 
+        if True:
+            image[7] = self.rm_baseline_zyx(image[7], idx) # to center around 0
 
         image = self.transform(image)
         mask = image[4].unsqueeze(0)
         zyxin= image[6].unsqueeze(0)
-        output= image[self.out_channels, :, :]
+        actin = image[7].unsqueeze(0)
+        output = image[self.out_channels].unsqueeze(0)
   
-        if 7 in in_unique: return {'mask': image[4].unsqueeze(0), 'zyxin': image[6].unsqueeze(0), 'actin': image[7].unsqueeze(0), 'output': image[self.out_channels, :, :], 'displacements': image[[0,1]]}
-        else:              return {'mask': image[4].unsqueeze(0), 'zyxin': image[6].unsqueeze(0), 'output': image[self.out_channels, :, :], 'displacements': image[[0,1]]}
+        return {'mask': image[4].unsqueeze(0), 'zyxin': image[6].unsqueeze(0), 'actin': image[7].unsqueeze(0), 'output': output}
     
-    
-    
-
-    
+            
     
     def get_loader(self, indices, batch_size, num_workers, pin_memory=True):
         sampler = SubsetRandomSampler(indices)
@@ -806,9 +690,7 @@ class Threshold(object):
         if self.norm_to_max: im /= np.abs(im).max()
         else: im /= self.rescale
     # Threshold
-        if len(self.out_channels)>1: im[:, np.linalg.norm(im, axis=0)<self.threshold] = 0
-        else: im[np.abs(im)<self.threshold] = 0
-
+        im[np.abs(im)<self.threshold] = 0
         image[self.out_channels, :, :] = im      
         return image
 
@@ -821,19 +703,6 @@ class Magnitude(object):
         
         return image
 
-class AngleMag(object): # transform from x,y -> |F|, angle
-    def __init__(self, out_channels):
-        self.out_channels = out_channels #[int(c) for c in out_channels.split(',')]
-
-    def __call__(self, image):
-        # atan2(y, x)
-        mag = np.linalg.norm(image[self.out_channels, :, :], axis=0)
-        ang = np.arctan2(image[self.out_channels[1], :, :], image[self.out_channels[0], :, :])
-        
-        image[self.out_channels[0],:,:] = mag
-        image[self.out_channels[1],:,:] = ang
-        
-        return image
 
 """-----------------------------------------------------------
 
@@ -852,13 +721,14 @@ class ResolutionChange(object):
 class RandomRescale(object):
     def __init__(self, rescale_factor=0.7):
         try:
-            self.res = float(zoomfactor)
+            self.res = float(1)
         except: self.res=1
         if self.res>1: 
             self.res = 1/self.res
 
     def __call__(self, image):
         z = np.random.uniform(low=self.res, high=1/self.res)
+        
         image = transforms.functional.affine(image, scale=z, angle=0, translate=[0,0], shear=0)
         return image
 

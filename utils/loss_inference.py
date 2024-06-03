@@ -105,7 +105,7 @@ class AM_loss_dict(nn.MSELoss): # Angle magnitude loss
         #print('mag_err', mag_err.shape)
         #print('pred_mag', pred_mag.shape)
 
-        return {'base_loss': mag_err_weighted*10 + ang_err_weighted, 
+        return {'base_loss': mag_err_weighted*10, 
                     'mse_loss': torch.nanmean(mse_loss, axis=(-1,-2)).detach(), # <(vec F  - vec F')^2>
                     'mse_weighted': mse_weighted.detach(),                      # <(vec F  - vec F')^2>
                     'mse_mag_weighted': mse_mag_weighted.detach(), 

@@ -10,7 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from utils.base_layers import DownsampleLayer, ConvNextCell
-from utils.loss import loss_function_dict 
+from utils.loss_inference import loss_function_dict
+
 import utils.plot as utils_plot
 
 from torch.utils.tensorboard import SummaryWriter
@@ -204,35 +205,7 @@ class UNet(nn.Module):
         if schedule['type']=='none':
             return x 
         
-        
-    def strainenergy_loss(self, Fpred, Fexp, Uexp, mask):
-        """
-        Calculate the strain energy of predicted and experimental forces. 
-        Strain energy obtained for both by dotting into displacement field U from experiment.
-        Optimal additional regularization/loss term. In practice did not seem to make a difference at all.
-        """
-
-        if self.angmag:
-            xt = Fexp[:,0]*torch.cos(Fexp[:,1])
-            yt = Fexp[:,0]*torch.sin(Fexp[:,1])
-
-            xp = Fpred[:,0]*torch.cos(Fpred[:,1])
-            yp = Fpred[:,0]*torch.sin(Fpred[:,1])
-    
-            Fexp = torch.cat([xt.unsqueeze(1), yt.unsqueeze(1)], axis=1)
-            Fpred = torch.cat([xp.unsqueeze(1), yp.unsqueeze(1)], axis=1)
-    
-        W_pred = torch.sum( Fpred*Uexp, axis=1, keepdim=True)
-        W_exp = torch.sum( Fexp*Uexp, axis=1, keepdim=True)
-
-        W_pred = W_pred[mask!=0].mean()
-        W_exp = W_exp[mask!=0].mean()
-
-        #assert W_exp>=0
-        return (W_pred-W_exp).pow(2)
-
-
-
+   
     def forward(self, x, return_input_after_BN=False):
         latents = []
 
@@ -276,16 +249,11 @@ class UNet(nn.Module):
         loss_dict = self.loss_function(prediction, batch['output'], expweight=expweight) 
         # loss_dict contains potential loss values. The one which should be gradded is called 'base_loss'
 
-        strainenergy_loss = self.strainenergy_loss(prediction, batch['output'], batch['displacements'], batch['mask'].bool())
 
-        loss = loss_dict['base_loss'] \
-                + self.reg_scheduler(self.loss_hparams.get('reg_schedule'), 
-                                     self.loss_hparams.get('strainenergy_regularization'),
-                                     epoch) *strainenergy_loss
+        loss = loss_dict['base_loss'] 
 
         if torch.isnan(loss):
-            print("LOSS IS NAN")
-            print(loss_dict, {'strainenergy_loss': strainenergy_loss})
+            print("LOSS IS NAN")            
 
 
     # Backprop
@@ -295,7 +263,7 @@ class UNet(nn.Module):
     # Store loss dict values in "running_train_loss" which is used to show scalars in tensorboard
         for x in loss_dict:
             loss_dict[x].detach()
-        loss_dict = {**loss_dict, 'strainenergy_loss': strainenergy_loss.sqrt().detach(),
+        loss_dict = {**loss_dict,
                         'exp_schedule': expweight,
                         'reg_schedule': self.reg_scheduler(  self.loss_hparams.get('reg_schedule'), 1., epoch)}
 
@@ -324,13 +292,10 @@ class UNet(nn.Module):
             loss_dict = self.loss_function(prediction, batch['output'], expweight=expweight) 
             # Contains loss values. The one which should be gradded is called 'base_loss'
 
-            strainenergy_loss = self.strainenergy_loss(prediction, batch['output'], batch['displacements'], batch['mask'].bool())
-            loss = loss_dict['base_loss'] \
-                + self.reg_scheduler(  self.loss_hparams.get('reg_schedule'), self.loss_hparams.get('strainenergy_regularization'), epoch)*strainenergy_loss
+            loss = loss_dict['base_loss'] 
 
         # Save loss dict values in "running_val_loss" which is used to show scalars in tensorboard
-            loss_dict = {**loss_dict, 'strainenergy_loss': strainenergy_loss.sqrt().detach(),
-                            'exp_schedule': expweight,
+            loss_dict = {**loss_dict, 'exp_schedule': expweight,
                             'reg_schedule': self.reg_scheduler(  self.loss_hparams.get('reg_schedule'), 1., epoch)}
             
             if not self.running_val_loss:
@@ -363,7 +328,8 @@ class UNet(nn.Module):
         return
             
  
-   
+    def get_running_val_loss(self):
+        return self.running_val_loss
 
 
 
