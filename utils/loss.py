@@ -91,7 +91,7 @@ class AM_loss_dict(nn.MSELoss): # Angle magnitude loss
             mag[mask.squeeze()==0] =torch.nan
             pred_mag[mask.squeeze()==0] = torch.nan
 
-        mse_loss = (mag-pred_mag)**2
+        mse_loss = (mag-pred_mag)**2*mag*pred_mag
         mse_mag_loss = torch.sqrt(mse_loss)
         
         mse_weighted = torch.nanmean(mse_loss*loss_weight, axis=(-1,-2))

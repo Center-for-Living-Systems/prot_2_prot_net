@@ -352,7 +352,7 @@ class CellDataset(Dataset):
 
         elif remove_type == 'none':
             def rm_baseline_zyx(zyx_im, idx): return zyx_im
-            def rm_baseline_act(act_im, idx): return act_im
+            def rm_baseline_act(act_im, idx): return act_im/10
         else: 
             if self.verbose: print('Default inputbaseline removal')
             def rm_baseline_zyx(zyx_im, idx): return (zyx_im - zyx_im.min())/1000
